@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">AirBridgeTouch</string>
+    <string name="notification_channel_transfers">Active transfers</string>
+    <string name="notification_transfer_active">AirBridgeTouch transfer active</string>
+</resources>

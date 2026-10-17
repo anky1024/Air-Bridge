@@ -1,6 +1,7 @@
 package com.airbridge.touch.transport.wifidirect
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -62,6 +63,7 @@ class WifiDirectTransport(private val appContext: Context) : FileTransferTranspo
         return TransportCapabilities(supported, wifiEnabled, permissionsGranted, details)
     }
 
+    @SuppressLint("MissingPermission")
     override suspend fun startDiscovery() {
         val caps = capabilities()
         if (!caps.supported) throw AppError.WifiDirectUnsupported()
@@ -78,6 +80,7 @@ class WifiDirectTransport(private val appContext: Context) : FileTransferTranspo
         }
     }
 
+    @SuppressLint("MissingPermission")
     override suspend fun stopDiscovery() {
         val m = manager ?: return
         val ch = channel ?: return
@@ -85,6 +88,7 @@ class WifiDirectTransport(private val appContext: Context) : FileTransferTranspo
         _state.value = TransportState.Idle
     }
 
+    @SuppressLint("MissingPermission")
     override suspend fun connect(peerId: String) {
         val device = peers[peerId] ?: throw AppError.ConnectionFailed("Selected peer is no longer available.")
         val m = manager ?: throw AppError.WifiDirectUnsupported()
@@ -98,6 +102,7 @@ class WifiDirectTransport(private val appContext: Context) : FileTransferTranspo
         }
     }
 
+    @SuppressLint("MissingPermission")
     override suspend fun disconnect() {
         val m = manager ?: return
         val ch = channel ?: return
@@ -137,6 +142,7 @@ class WifiDirectTransport(private val appContext: Context) : FileTransferTranspo
         receiverRegistered = false
     }
 
+    @SuppressLint("MissingPermission")
     private fun requestPeerList() {
         val m = manager ?: return
         val ch = channel ?: return
@@ -152,6 +158,7 @@ class WifiDirectTransport(private val appContext: Context) : FileTransferTranspo
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun requestConnectionInfo() {
         val m = manager ?: return
         val ch = channel ?: return
@@ -159,11 +166,7 @@ class WifiDirectTransport(private val appContext: Context) : FileTransferTranspo
             m.requestConnectionInfo(ch) { info: WifiP2pInfo ->
                 if (info.groupFormed) {
                     val peerName = peers.values.firstOrNull()?.deviceName ?: "Connected peer"
-                    _state.value = TransportState.Connected(
-                        peerName = peerName,
-                        isGroupOwner = info.isGroupOwner,
-                        groupOwnerAddress = info.groupOwnerAddress?.hostAddress
-                    )
+                    _state.value = TransportState.Connected(peerName, info.isGroupOwner, info.groupOwnerAddress?.hostAddress)
                 } else {
                     _state.value = TransportState.Idle
                 }

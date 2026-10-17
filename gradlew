@@ -13,6 +13,11 @@ if ! command -v java >/dev/null 2>&1; then
   exit 1
 fi
 
+if command -v sdkmanager >/dev/null 2>&1; then
+  yes | sdkmanager --licenses >/dev/null 2>&1 || true
+  sdkmanager "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null || true
+fi
+
 if [ ! -x "${GRADLE_HOME}/bin/gradle" ]; then
   mkdir -p "${CACHE_DIR}"
   if [ ! -f "${ZIP_PATH}" ]; then

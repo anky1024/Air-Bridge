@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-GRADLE_VERSION="8.13"
+GRADLE_VERSION="8.11.1"
 DIST="gradle-${GRADLE_VERSION}-bin.zip"
 CACHE_DIR="${HOME}/.gradle/airbridgetouch-bootstrap"
 GRADLE_HOME="${CACHE_DIR}/gradle-${GRADLE_VERSION}"

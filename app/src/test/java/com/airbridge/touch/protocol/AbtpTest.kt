@@ -3,113 +3,124 @@ package com.airbridge.touch.protocol
 import com.airbridge.touch.core.AppError
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
-import org.junit.Assert.assertTrue
+import org.junit.Assert.assertArrayEquals
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
+import java.util.UUID
 
+/** Tests for the canonical protocol in AirBridgeProtocol.kt. */
 class AbtpTest {
 
-    @Test
-    fun `frame encode-decode round trip`() {
-        val payload = Payloads.writeHello("device-1", "Pixel 10a")
-        val frame = Frame(Abtp.Type.HELLO, payload)
-        val bytes = FrameCodec.encode(frame)
-        val decoded = FrameCodec.decode(DataInputStream(ByteArrayInputStream(bytes)))
-        assertEquals(Abtp.Type.HELLO, decoded.type)
-        assertEquals("device-1", Payloads.readHello(PayloadReader(decoded.payload)).first)
-        assertEquals("Pixel 10a", Payloads.readHello(PayloadReader(decoded.payload)).second)
+    private fun codecOut(): Pair<FrameCodec, ByteArrayOutputStream> {
+        val out = ByteArrayOutputStream()
+        val c = FrameCodec(ByteArrayInputStream(ByteArray(0)), out)
+        return c to out
     }
 
     @Test
-    fun `bad magic is rejected`() {
-        val bytes = FrameCodec.encode(Frame(Abtp.Type.HELLO, Payloads.writeHello("a", "b")))
+    fun frameRoundTrip() {
+        val (codecOut, out) = codecOut()
+        val payload = BinaryPayloads.hello("Pixel 10a", UUID.randomUUID())
+        codecOut.write(Frame(MessageType.HELLO, payload))
+        val codecIn = FrameCodec(ByteArrayInputStream(out.toByteArray()), ByteArrayOutputStream())
+        val frame = codecIn.read()
+        assertEquals(MessageType.HELLO, frame.type)
+        assertArrayEquals(payload, frame.payload)
+    }
+
+    @Test
+    fun badMagicRejected() {
+        val (codecOut, out) = codecOut()
+        codecOut.write(Frame(MessageType.HELLO, BinaryPayloads.hello("a", UUID.randomUUID())))
+        val bytes = out.toByteArray()
         bytes[0] = 0x00
-        assertThrows(AppError.ProtocolViolation::class.java) {
-            FrameCodec.decode(DataInputStream(ByteArrayInputStream(bytes)))
-        }
+        val codecIn = FrameCodec(ByteArrayInputStream(bytes), ByteArrayOutputStream())
+        assertThrows(AppError.ProtocolViolation::class.java) { codecIn.read() }
     }
 
     @Test
-    fun `invalid frame length is rejected`() {
-        val bytes = FrameCodec.encode(Frame(Abtp.Type.HELLO, Payloads.writeHello("a", "b")))
-        // Corrupt the length field to an absurd value.
-        bytes[4] = 0x7F.toByte()
-        assertThrows(AppError.ProtocolViolation::class.java) {
-            FrameCodec.decode(DataInputStream(ByteArrayInputStream(bytes)))
-        }
+    fun invalidFrameLengthRejected() {
+        val (codecOut, out) = codecOut()
+        codecOut.write(Frame(MessageType.HELLO, BinaryPayloads.hello("a", UUID.randomUUID())))
+        val bytes = out.toByteArray()
+        bytes[8] = 0x7F
+        val codecIn = FrameCodec(ByteArrayInputStream(bytes), ByteArrayOutputStream())
+        assertThrows(AppError.ProtocolViolation::class.java) { codecIn.read() }
     }
 
     @Test
-    fun `unknown frame type is rejected`() {
-        val bytes = FrameCodec.encode(Frame(Abtp.Type.HELLO, Payloads.writeHello("a", "b")))
-        bytes[2] = 0x7F
-        assertThrows(AppError.ProtocolViolation::class.java) {
-            FrameCodec.decode(DataInputStream(ByteArrayInputStream(bytes)))
-        }
+    fun unknownMessageTypeRejected() {
+        val (codecOut, out) = codecOut()
+        codecOut.write(Frame(MessageType.CLOSE, ByteArray(0)))
+        val bytes = out.toByteArray()
+        bytes[4] = 0x7F
+        bytes[5] = 0x7F
+        val codecIn = FrameCodec(ByteArrayInputStream(bytes), ByteArrayOutputStream())
+        assertThrows(AppError.ProtocolViolation::class.java) { codecIn.read() }
     }
 
     @Test
-    fun `truncated payload string throws`() {
-        val writer = PayloadWriter().string("id", 64)
-        val p = PayloadReader(writer.toByteArray())
-        // Corrupt: claim a very long string length.
-        val bad = byteArrayOf(0x7F, 0x7F) + writer.toByteArray().drop(2).toByteArray()
-        assertThrows(AppError.ProtocolViolation::class.java) {
-            PayloadReader(bad).string(64)
-        }
-    }
-
-    @Test
-    fun `transfer request round trip with all fields`() {
-        val bytes = Payloads.writeTransferRequest("tid-1", "photo.jpg", 1234567, "abc123")
-        val req = Payloads.readTransferRequest(PayloadReader(bytes))
-        assertEquals("tid-1", req.transferId)
+    fun transferRequestRoundTrip() {
+        val id = UUID.randomUUID()
+        val sha = ByteArray(32) { it.toByte() }
+        val bytes = BinaryPayloads.transferRequest(id, "photo.jpg", 1234567L, sha)
+        val req = BinaryPayloads.parseTransferRequest(bytes)
+        assertEquals(id, req.transferId)
         assertEquals("photo.jpg", req.fileName)
         assertEquals(1234567L, req.size)
-        assertEquals("abc123", req.sha256Hex)
+        assertArrayEquals(sha, req.sha256)
     }
 
     @Test
-    fun `oversized announced size is rejected`() {
-        val bytes = Payloads.writeTransferRequest("t", "f.bin", Long.MAX_VALUE / 2, "")
-        assertThrows(AppError.ProtocolViolation::class.java) {
-            Payloads.readTransferRequest(PayloadReader(bytes))
+    fun oversizedTransferRequestRejected() {
+        val bytes = BinaryPayloads.transferRequest(UUID.randomUUID(), "f.bin", Long.MAX_VALUE / 2, ByteArray(32))
+        assertThrows(AppError.SecurityRejection::class.java) {
+            BinaryPayloads.parseTransferRequest(bytes)
         }
     }
 
     @Test
-    fun `chunk round trip`() {
+    fun dataChunkRoundTrip() {
+        val id = UUID.randomUUID()
         val data = ByteArray(1000) { (it % 251).toByte() }
-        val bytes = Payloads.writeChunk("t-1", data)
-        val (id, out) = Payloads.readChunk(PayloadReader(bytes), 4096)
-        assertEquals("t-1", id)
-        assertTrue(data.contentEquals(out))
+        val bytes = BinaryPayloads.dataChunk(id, 42L, data)
+        val chunk = BinaryPayloads.parseDataChunk(bytes)
+        assertEquals(id, chunk.transferId)
+        assertEquals(42L, chunk.offset)
+        assertArrayEquals(data, chunk.data)
     }
 
     @Test
-    fun `progress ack round trip`() {
-        val bytes = Payloads.writeProgressAck("t-1", 987654321L)
-        val (id, n) = Payloads.readProgressAck(PayloadReader(bytes))
-        assertEquals("t-1", id)
-        assertEquals(987654321L, n)
+    fun oversizedChunkLengthRejected() {
+        val buffer = java.nio.ByteBuffer.allocate(64).order(java.nio.ByteOrder.BIG_ENDIAN)
+        buffer.putLong(UUID.randomUUID().mostSignificantBits)
+        buffer.putLong(UUID.randomUUID().leastSignificantBits)
+        buffer.putLong(0L)
+        buffer.putInt(AirBridgeProtocol.MAX_CHUNK_BYTES + 1)
+        val bytes = buffer.array().copyOf(buffer.position())
+        assertThrows(AppError.ProtocolViolation::class.java) {
+            BinaryPayloads.parseDataChunk(bytes)
+        }
     }
 
     @Test
-    fun `cancel carries reason`() {
-        val bytes = Payloads.writeCancel("t-1", "User cancelled")
-        val (id, reason) = Payloads.readCancel(PayloadReader(bytes))
-        assertEquals("t-1", id)
-        assertEquals("User cancelled", reason)
+    fun transferResponseRoundTrip() {
+        val id = UUID.randomUUID()
+        val bytes = BinaryPayloads.transferResponse(id, true, "ok")
+        val resp = BinaryPayloads.parseTransferResponse(bytes)
+        assertEquals(id, resp.transferId)
+        assertEquals(true, resp.accepted)
+        assertEquals("ok", resp.reason)
     }
 
     @Test
-    fun `empty payload frame works`() {
-        val bytes = FrameCodec.encode(Frame(Abtp.Type.CLOSE, ByteArray(0)))
-        val f = FrameCodec.decode(DataInputStream(ByteArrayInputStream(bytes)))
-        assertEquals(Abtp.Type.CLOSE, f.type)
-        assertEquals(0, f.payload.size)
+    fun emptyPayloadFrameWorks() {
+        val (codecOut, out) = codecOut()
+        codecOut.write(Frame(MessageType.CLOSE, ByteArray(0)))
+        val codecIn = FrameCodec(ByteArrayInputStream(out.toByteArray()), ByteArrayOutputStream())
+        val frame = codecIn.read()
+        assertEquals(MessageType.CLOSE, frame.type)
+        assertEquals(0, frame.payload.size)
     }
 }

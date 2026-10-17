@@ -10,11 +10,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.security.MessageDigest
 import java.util.UUID
-import kotlin.math.min
 
 object AirBridgeProtocol {
     const val MAGIC: Int = 0x41425431 // ABT1
-    const val VERSION: UShort = 1u
+    const val VERSION: Int = 1
     const val HEADER_BYTES: Int = 12
     const val MAX_FRAME_BYTES: Int = 1024 * 1024
     const val MAX_METADATA_BYTES: Int = 16 * 1024
@@ -24,22 +23,22 @@ object AirBridgeProtocol {
     const val SOCKET_TIMEOUT_MS: Int = 30_000
 }
 
-enum class MessageType(val code: UShort) {
-    HELLO(1u),
-    HELLO_ACK(2u),
-    TRANSFER_REQUEST(10u),
-    TRANSFER_RESPONSE(11u),
-    FILE_METADATA(12u),
-    TRANSFER_START(13u),
-    DATA_CHUNK(14u),
-    PROGRESS_ACK(15u),
-    TRANSFER_COMPLETE(16u),
-    CANCEL(17u),
-    ERROR(18u),
-    CLOSE(19u);
+enum class MessageType(val code: Int) {
+    HELLO(1),
+    HELLO_ACK(2),
+    TRANSFER_REQUEST(10),
+    TRANSFER_RESPONSE(11),
+    FILE_METADATA(12),
+    TRANSFER_START(13),
+    DATA_CHUNK(14),
+    PROGRESS_ACK(15),
+    TRANSFER_COMPLETE(16),
+    CANCEL(17),
+    ERROR(18),
+    CLOSE(19);
 
     companion object {
-        fun fromCode(code: UShort): MessageType = entries.firstOrNull { it.code == code }
+        fun fromCode(code: Int): MessageType = entries.firstOrNull { it.code == code }
             ?: throw AppError.ProtocolViolation("Unknown protocol message type.")
     }
 }
@@ -52,10 +51,7 @@ data class Frame(val type: MessageType, val payload: ByteArray) {
     }
 }
 
-class FrameCodec(
-    private val input: InputStream,
-    private val output: OutputStream
-) {
+class FrameCodec(input: InputStream, output: OutputStream) {
     private val din = DataInputStream(input)
     private val dout = DataOutputStream(output)
 
@@ -83,13 +79,11 @@ class FrameCodec(
         val header = ByteBuffer.wrap(headerBytes).order(ByteOrder.BIG_ENDIAN)
         val magic = header.int
         if (magic != AirBridgeProtocol.MAGIC) throw AppError.ProtocolViolation("Invalid protocol magic.")
-        val type = MessageType.fromCode(header.short.toUShort())
-        val version = header.short.toUShort()
+        val type = MessageType.fromCode(header.short.toInt() and 0xffff)
+        val version = header.short.toInt() and 0xffff
         if (version > AirBridgeProtocol.VERSION) throw AppError.ProtocolViolation("Unsupported protocol version.")
         val length = header.int
-        if (length < 0 || length > AirBridgeProtocol.MAX_FRAME_BYTES) {
-            throw AppError.ProtocolViolation("Invalid frame length.")
-        }
+        if (length < 0 || length > AirBridgeProtocol.MAX_FRAME_BYTES) throw AppError.ProtocolViolation("Invalid frame length.")
         val payload = ByteArray(length)
         din.readFully(payload)
         return Frame(type, payload)
